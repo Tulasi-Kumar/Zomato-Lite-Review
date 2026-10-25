@@ -69,16 +69,22 @@ export async function GET(
   const averageRating =
     stats.average === null ? null : Math.round(stats.average * 10) / 10;
 
-  // Rating distribution — a complete 1..5 table so the screen can draw bars as-is.
+  // Rating distribution — a complete 1..5 table with ready-to-print bar widths.
+  // (The frontend prints {percent}% widths; IT never computes percentages.)
   const distributionRows = await db`
     SELECT rating, COUNT(*)::int AS count
     FROM reviews WHERE restaurant_id = ${restaurantId}
     GROUP BY rating
   `;
   const countByRating = new Map(distributionRows.map((r) => [r.rating, r.count]));
-  const distribution = [5, 4, 3, 2, 1].map((rating) => ({
+  const rawDistribution = [5, 4, 3, 2, 1].map((rating) => ({
     rating,
     count: countByRating.get(rating) ?? 0,
+  }));
+  const maxCount = Math.max(1, ...rawDistribution.map((d) => d.count));
+  const distribution = rawDistribution.map((d) => ({
+    ...d,
+    percent: Math.round((d.count / maxCount) * 100),
   }));
 
   // ---- THE REVIEWS ----
@@ -164,13 +170,15 @@ export async function GET(
   }
 
   function shapeItem(r: Record<string, unknown>) {
-    const average = Math.round(r.average * 10) / 10;
+    const rawAverage = r.average as number;
+    const average = Math.round(rawAverage * 10) / 10;
+    const reviewCount = (r.count as number) ?? 0;
     return {
-      name: r.name,
-      kind: r.kind,
-      average,                     // the fact, shown honestly
-      score: weighted(average, r.count), // our weighted opinion, used for ranking
-      reviewCount: r.count,
+      name: r.name as string,
+      kind: r.kind as string,
+      average,                             // the fact, shown honestly
+      score: weighted(average, reviewCount), // our weighted opinion, used for ranking
+      reviewCount,
     };
   }
 
@@ -233,6 +241,12 @@ export async function GET(
     }
   }
 
+  // The answering shape includes the menu too — the review form draws its
+  // item chips from THIS list, so fakerjs cannot conjure menu items client-side.
+  const menuRows = await db`
+    SELECT id, name, kind FROM menu_items WHERE restaurant_id = ${restaurantId} ORDER BY id
+  `;
+
   // ---- THE RESPONSE, shaped like the screen ----
   return Response.json({
     name: restaurant.name,
@@ -244,6 +258,7 @@ export async function GET(
     latestReview,
     reviews,
     topItems,
+    menu: menuRows,
     summary,
   });
 }

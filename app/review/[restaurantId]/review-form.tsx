@@ -1,29 +1,39 @@
 'use client';
 
-// app/review/[restaurantId]/review-form.tsx — THE ORDER FORM (the actual screen).
-// Star picker, comment box, Submit.
-// Frontend validation = kindness. Backend validation = security. Both exist.
+// app/review/[restaurantId]/review-form.tsx — THE ORDER FORM, Ember Edition.
+// Name (optional), stars, comment, and the honest question: what did you eat?
+// Frontend validation = kindness (disabled button, maxLength).
+// Backend validation = security (30-char check, item existence). Both live.
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+
+type ApiMenu = { id: number; name: string; kind: string };
 
 export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
   const router = useRouter();
 
   const [restaurantName, setRestaurantName] = useState<string | null>(null);
-  const [rating, setRating] = useState(0); // 0 = nothing picked yet
+  const [menu, setMenu] = useState<ApiMenu[]>([]);
+  const [rating, setRating] = useState(0);
+  const [displayName, setDisplayName] = useState('');
   const [comment, setComment] = useState('');
+  const [itemIds, setItemIds] = useState<Set<number>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [celebrating, setCelebrating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // We fetch the restaurant just to show its name at the top —
-  // so the reviewer knows exactly what they are reviewing.
+  // The form gets the restaurant name AND the menu from the same endpoint
+  // that powers the restaurant page — items shown as chips are only
+  // REAL menu items; fake submissions get rejected by the backend anyway.
   useEffect(() => {
     let cancelled = false;
     fetch(`/api/restaurants/${restaurantId}`)
       .then((res) => (res.ok ? res.json() : Promise.reject(new Error('not found'))))
-      .then((data: { name: string }) => {
-        if (!cancelled) setRestaurantName(data.name);
+      .then((data: { name: string; menu: ApiMenu[] }) => {
+        if (cancelled) return;
+        setRestaurantName(data.name);
+        setMenu(data.menu);
       })
       .catch(() => {
         if (!cancelled) setRestaurantName(null);
@@ -33,12 +43,20 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
     };
   }, [restaurantId]);
 
-  // KINDNESS CHECK (frontend): Submit stays disabled until BOTH are valid.
-  // The backend re-checks everything anyway — this only saves honest users a trip.
-  const canSubmit = rating >= 1 && comment.trim().length > 0 && !submitting;
+  const canSubmit =
+    rating >= 1 && comment.trim().length > 0 && displayName.length <= 30 && !submitting;
+
+  function toggleItem(itemId: number) {
+    setItemIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(itemId)) next.delete(itemId);
+      else next.add(itemId);
+      return next;
+    });
+  }
 
   async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault(); // stop the browser's old-school full-page form submit
+    event.preventDefault();
     setSubmitting(true);
     setError(null);
 
@@ -50,17 +68,21 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
           restaurantId: Number(restaurantId),
           rating,
           comment: comment.trim(),
+          ...(displayName.trim().length > 0 ? { displayName: displayName.trim() } : {}),
+          ...(itemIds.size > 0 ? { items: [...itemIds] } : {}),
         }),
       });
 
       if (res.status === 201) {
-        // Success — show the restaurant page, which re-reads everything fresh.
-        router.push(`/restaurant/${restaurantId}`);
+        // Celebration, then page change — the restaurant page re-reads everything fresh.
+        setCelebrating(true);
+        setTimeout(() => {
+          router.push(`/restaurant/${restaurantId}`);
+        }, 1300);
         return;
       }
 
-      // ANY failure (400, 500...): show the BACKEND'S message, verbatim.
-      // We do not invent our own here — the backend's reason is the truth.
+      // Show the BACKEND'S message verbatim — it is the source of truth.
       const data = await res.json();
       setError(data.error ?? 'Something went wrong.');
     } catch {
@@ -70,66 +92,158 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
     }
   }
 
+  const vegItems = menu.filter((item) => item.kind === 'veg');
+  const nonVegItems = menu.filter((item) => item.kind === 'non_veg');
+
   return (
-    <main className="mx-auto min-h-screen max-w-[560px] bg-stone-50 px-6 py-16 text-neutral-900">
-      <h1 className="text-3xl font-semibold tracking-tight">
-        {restaurantName ?? 'Loading…'}
-      </h1>
-      <p className="mt-1 text-sm text-neutral-500">Write a review</p>
+    <main className="min-h-screen bg-background px-6 py-12 text-cream">
+      <div className="mx-auto max-w-[560px]">
 
-      <form onSubmit={handleSubmit} className="mt-10 space-y-10">
-        {/* Star picker — the only allowed way to choose 1 to 5 */}
-        <div>
-          <label className="mb-3 block text-sm font-medium">Rating</label>
-          <div className="flex gap-2">
-            {[1, 2, 3, 4, 5].map((star) => (
-              <button
-                key={star}
-                type="button"
-                aria-label={`${star} star${star === 1 ? '' : 's'}`}
-                onClick={() => setRating(star)}
-                className={`flex h-11 w-11 items-center justify-center rounded-lg border text-lg transition-colors ${
-                  star <= rating
-                    ? 'border-amber-300 bg-amber-50 text-amber-700'
-                    : 'border-neutral-200 bg-white text-neutral-300'
-                }`}
-              >
-                ★
-              </button>
-            ))}
+        {/* Celebration overlay — pure presentational toast, then redirect */}
+        {celebrating && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-background/90">
+            <div className="rounded-2xl border border-ember/40 bg-surface px-10 py-8 text-center">
+              <p className="text-3xl tracking-widest text-ember">★ ★ ★</p>
+              <p className="mt-4 text-lg font-medium">Thanks! Your review is live.</p>
+              <p className="mt-1 text-sm text-cream-muted">Taking you to the restaurant page…</p>
+            </div>
           </div>
-        </div>
-
-        {/* Comment box */}
-        <div>
-          <label htmlFor="comment" className="mb-3 block text-sm font-medium">
-            Your review
-          </label>
-          <textarea
-            id="comment"
-            rows={4}
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder="What did you think?"
-            className="w-full resize-none rounded-lg border border-neutral-200 bg-white p-3 text-neutral-900 placeholder:text-neutral-400 focus:border-neutral-400 focus:outline-none"
-          />
-        </div>
-
-        {/* Backend error, displayed VERBATIM — kind-looking, quiet */}
-        {error && (
-          <p className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-800">
-            {error}
-          </p>
         )}
 
-        <button
-          type="submit"
-          disabled={!canSubmit}
-          className="rounded-lg bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-neutral-300"
-        >
-          {submitting ? 'Submitting…' : 'Submit review'}
-        </button>
-      </form>
+        <header>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-ember">New review</p>
+          <h1 className="mt-2 text-4xl font-semibold tracking-tight">
+            {restaurantName ?? 'Loading…'}
+          </h1>
+          <p className="mt-1 text-sm text-cream-muted">Your review publishes instantly — no account needed.</p>
+        </header>
+
+        <form onSubmit={handleSubmit} className="mt-10 space-y-9">
+
+          {/* Name — optional */}
+          <div>
+            <label htmlFor="displayName" className="mb-3 block text-sm font-medium">
+              Your name <span className="font-normal text-cream-muted">(optional — shows on your review)</span>
+            </label>
+            <input
+              id="displayName"
+              type="text"
+              value={displayName}
+              maxLength={30} /* kindness; the backend re-checks for real */
+              onChange={(e) => setDisplayName(e.target.value)}
+              placeholder="e.g. Priya Sharma"
+              className="w-full rounded-xl border border-line bg-surface px-4 py-3 text-cream placeholder:text-cream-muted/50 focus:border-ember/50 focus:outline-none"
+            />
+          </div>
+
+          {/* Stars */}
+          <div>
+            <label className="mb-3 block text-sm font-medium">Rating</label>
+            <div className="flex gap-2.5">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  aria-label={`${star} star${star === 1 ? '' : 's'}`}
+                  onClick={() => setRating(star)}
+                  className={`flex h-12 w-12 items-center justify-center rounded-xl border text-2xl transition-colors ${
+                    star <= rating
+                      ? 'border-ember/60 bg-ember/15 text-ember'
+                      : 'border-line bg-surface text-cream-muted/40 hover:border-ember/30'
+                  }`}
+                >
+                  ★
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* What did you eat? — chips built ONLY from the real menu */}
+          {menu.length > 0 && (
+            <div>
+              <label className="mb-3 block text-sm font-medium">
+                What did you eat? <span className="font-normal text-cream-muted">(optional)</span>
+              </label>
+              <ChipGroup label="Vegetarian" items={vegItems} selected={itemIds} onToggle={toggleItem} color="veggie" />
+              <div className="mt-3">
+                <ChipGroup label="Non-vegetarian" items={nonVegItems} selected={itemIds} onToggle={toggleItem} color="meat" />
+              </div>
+            </div>
+          )}
+
+          {/* Comment */}
+          <div>
+            <label htmlFor="comment" className="mb-3 block text-sm font-medium">
+              Your review
+            </label>
+            <textarea
+              id="comment"
+              rows={4}
+              value={comment}
+              onChange={(e) => setComment(e.target.value)}
+              placeholder="What did you think? Which burrito deserves a fan club?"
+              className="w-full resize-none rounded-xl border border-line bg-surface px-4 py-3 text-cream placeholder:text-cream-muted/50 focus:border-ember/50 focus:outline-none"
+            />
+          </div>
+
+          {/* Backend error, shown VERBATIM */}
+          {error && (
+            <p className="rounded-xl border border-red-900/60 bg-red-950/40 p-4 text-sm text-red-300">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="w-full rounded-xl bg-ember px-6 py-3.5 text-sm font-semibold text-[#1a1408] transition-colors hover:bg-ember-dim disabled:cursor-not-allowed disabled:bg-surface disabled:text-cream-muted"
+          >
+            {submitting ? 'Submitting…' : 'Submit review'}
+          </button>
+        </form>
+      </div>
     </main>
+  );
+}
+
+function ChipGroup({
+  label,
+  items,
+  selected,
+  onToggle,
+  color,
+}: {
+  label: string;
+  items: ApiMenu[];
+  selected: Set<number>;
+  onToggle: (id: number) => void;
+  color: 'veggie' | 'meat';
+}) {
+  if (items.length === 0) return null;
+  const active = color === 'veggie' ? 'border-veggie bg-veggie/15 text-veggie' : 'border-meat bg-meat/15 text-meat';
+  return (
+    <div>
+      <p className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-cream-muted">{label}</p>
+      <div className="flex flex-wrap gap-2">
+        {items.map((item) => {
+          const isSelected = selected.has(item.id);
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => onToggle(item.id)}
+              aria-pressed={isSelected}
+              className={`rounded-full border px-3.5 py-2 text-sm transition-colors ${
+                isSelected
+                  ? active
+                  : 'border-line bg-surface text-cream-muted hover:border-cream-muted/40 hover:text-cream'
+              }`}
+            >
+              {isSelected ? '✓ ' : ''}{item.name}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }

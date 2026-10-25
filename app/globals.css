@@ -1,26 +1,40 @@
 @import "tailwindcss";
 
+/* ---------------- Warm Ember Dark theme ----------------
+   Deep charcoal like a candle-lit dining room floor,
+   warm amber like firelight, cream type like menus printed on card stock. */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #171411;
+  --foreground: #f3eadd;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+
+  --color-surface: #211c17;        /* cards */
+  --color-surface-raised: #2a231d; /* highlighted cards */
+  --color-line: #3a312a;           /* hairline borders */
+
+  --color-cream: #f3eadd;          /* primary text */
+  --color-cream-muted: #b0a28e;    /* secondary text */
+
+  --color-ember: #f59e0b;          /* the one warm accent */
+  --color-ember-dim: #b45309;      /* pressed/faded accent */
+  --color-veggie: #7bb661;         /* used ONLY for veg tags */
+  --color-meat: #d97c50;           /* used ONLY for non-veg tags */
+
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  color-scheme: dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
