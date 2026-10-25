@@ -519,29 +519,15 @@ export default function RestaurantScreen({ id }: { id: string }) {
                 </div>
               )}
               {topItems.nonVeg.length > 0 && (
-                <div className="mt-3 space-y-2.5">
-                  {topItems.nonVeg.map((item, index) => (
-                    <div
-                      key={item.name}
-                      className="flex items-center justify-between rounded-2xl border border-meat/25 bg-surface p-4"
-                    >
-                      <div className="flex items-center gap-3">
-                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-meat/15 text-xs font-bold text-meat">
-                          {index + 1}
-                        </span>
-                        <div>
-                          <p className="text-sm font-medium">{item.name}</p>
-                          <p className="text-xs text-cream-muted">
-                            {item.average} average · {item.reviewCount}{' '}
-                            {item.reviewCount === 1 ? 'review' : 'reviews'}
-                          </p>
-                        </div>
-                      </div>
-                      <span className="rounded-full bg-meat/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-meat">
-                        Non-veg
-                      </span>
-                    </div>
-                  ))}
+                <div className="mt-3 rounded-2xl border border-meat/30 bg-surface p-5">
+                  <span className="rounded-full bg-meat/15 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wider text-meat">
+                    Top non-veg
+                  </span>
+                  <p className="mt-3 text-lg font-semibold">{topItems.nonVeg[0].name}</p>
+                  <p className="mt-0.5 text-sm text-cream-muted">
+                    {topItems.nonVeg[0].average} average · {topItems.nonVeg[0].reviewCount}{' '}
+                    {topItems.nonVeg[0].reviewCount === 1 ? 'review' : 'reviews'}
+                  </p>
                 </div>
               )}
             </section>
