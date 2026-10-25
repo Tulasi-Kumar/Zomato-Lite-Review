@@ -134,7 +134,19 @@ export async function GET(
   const latestReview = allReviews.length > 0 ? shapeReview(allReviews[0]) : null;
   const reviews = allReviews.slice(1).map(shapeReview);
 
-  // ---- MUST-TRY ITEMS (AVG per item, computed live) ----
+  // ---- MUST-TRY ITEMS (computed live) ----
+  // Raw item average is a fact: SUM(reviews)/COUNT(reviews).
+  // The must-try score is our ranking OPINION layered on those facts, and it
+  // weighs BOTH the item's average AND how many reviews stand behind it —
+  // the Bayesian weighted rating (what IMDb Top 250 does):
+  //
+  //   score = (v / (v + M)) * itemAvg + (M / (v + M)) * overallAvg
+  //
+  // A lonely 5.0 gets pulled toward the restaurant's overall average (4.3),
+  // while a 4.75 earned across four reviews stands nearly unshaken.
+  const PRIOR_REVIEWS = 3; // M — reviews before an item "speaks for itself"
+  const overallAverage = averageRating ?? 0;
+
   const itemStatsRows = await db`
     SELECT menu_items.name, menu_items.kind,
            AVG(reviews.rating)::float AS average, COUNT(*)::int AS count
@@ -143,16 +155,35 @@ export async function GET(
     JOIN reviews ON reviews.id = review_items.review_id
     WHERE reviews.restaurant_id = ${restaurantId}
     GROUP BY menu_items.name, menu_items.kind
-    ORDER BY average DESC
   `;
+
+  function weighted(itemAverage: number, reviewCount: number): number {
+    const confidence = reviewCount / (reviewCount + PRIOR_REVIEWS);
+    const score = confidence * itemAverage + (1 - confidence) * overallAverage;
+    return Math.round(score * 10) / 10;
+  }
+
+  function shapeItem(r: Record<string, unknown>) {
+    const average = Math.round(r.average * 10) / 10;
+    return {
+      name: r.name,
+      kind: r.kind,
+      average,                     // the fact, shown honestly
+      score: weighted(average, r.count), // our weighted opinion, used for ranking
+      reviewCount: r.count,
+    };
+  }
+
   const veg = itemStatsRows
     .filter((r) => r.kind === "veg")
-    .map((r) => ({ name: r.name, average: Math.round(r.average * 10) / 10, reviewCount: r.count }));
+    .map(shapeItem)
+    .sort((a, b) => b.score - a.score);
   const nonVeg = itemStatsRows
     .filter((r) => r.kind === "non_veg")
-    .map((r) => ({ name: r.name, average: Math.round(r.average * 10) / 10, reviewCount: r.count }));
+    .map(shapeItem)
+    .sort((a, b) => b.score - a.score);
   const topItems = {
-    veg: veg.slice(0, 1),      // the ONE must-try veg item
+    veg: veg.slice(0, 1),       // the ONE must-try veg item
     nonVeg: nonVeg.slice(0, 3), // the top 3 non-veg
   };
 
