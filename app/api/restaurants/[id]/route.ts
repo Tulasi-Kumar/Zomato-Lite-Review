@@ -52,30 +52,71 @@ export async function GET(
 
   const db = getDb();
 
-  const restaurantRows = await db`
-    SELECT name, cuisine, area FROM restaurants WHERE id = ${restaurantId}
-  `;
+  // PERFORMANCE: every query below is independent, so they all go out in ONE
+  // network wave (even the restaurant lookup itself). On Vercel (US servers
+  // next to Neon) this wave is milliseconds; locally it's your distance to
+  // Ohio, so making it one wave is the difference between 2 round-trips and 10.
+  const [
+    restaurantRows,
+    statsRows,
+    distributionRows,
+    allReviews,
+    itemRows,
+    reactionRows,
+    personRows,
+    menuRows,
+    itemStatsRows,
+    cachedSummaryRows,
+  ] = await Promise.all([
+    db`SELECT name, cuisine, area FROM restaurants WHERE id = ${restaurantId}`,
+    // the two headline numbers
+    db`SELECT AVG(rating)::float AS average, COUNT(*)::int AS total
+       FROM reviews WHERE restaurant_id = ${restaurantId}`,
+    // rating histogram
+    db`SELECT rating, COUNT(*)::int AS count
+       FROM reviews WHERE restaurant_id = ${restaurantId} GROUP BY rating`,
+    // every review, newest first
+    db`SELECT id, rating, comment, display_name, created_at
+       FROM reviews WHERE restaurant_id = ${restaurantId} ORDER BY created_at DESC`,
+    // which items each review claims (joined here, grouped in code)
+    db`SELECT review_items.review_id, menu_items.name
+       FROM review_items JOIN menu_items ON menu_items.id = review_items.item_id
+       WHERE menu_items.restaurant_id = ${restaurantId}`,
+    // how helpful each review currently is
+    db`SELECT reviews.id, COUNT(*)::int AS count
+       FROM reactions JOIN reviews ON reviews.id = reactions.review_id
+       WHERE reviews.restaurant_id = ${restaurantId} GROUP BY reviews.id`,
+    // reviews per person (badges)
+    db`SELECT display_name, COUNT(*)::int AS count
+       FROM reviews WHERE restaurant_id = ${restaurantId} AND display_name IS NOT NULL
+       GROUP BY display_name`,
+    // the menu (the review form draws its chips from this)
+    db`SELECT id, name, kind FROM menu_items WHERE restaurant_id = ${restaurantId} ORDER BY id`,
+    // per-item averages for must-try ranking (facts: AVG + COUNT)
+    db`SELECT menu_items.name, menu_items.kind,
+              AVG(reviews.rating)::float AS average, COUNT(*)::int AS count
+       FROM review_items
+       JOIN menu_items ON menu_items.id = review_items.item_id
+       JOIN reviews ON reviews.id = review_items.review_id
+       WHERE reviews.restaurant_id = ${restaurantId}
+       GROUP BY menu_items.name, menu_items.kind`,
+    // the one approved cache: the last AI summary
+    db`SELECT summary_text, review_count_at_generation
+       FROM ai_summaries WHERE restaurant_id = ${restaurantId}`,
+  ]);
+
+  // The restaurant existence check is now part of the wave (404 rule unchanged).
   if (restaurantRows.length === 0) {
     return Response.json({ error: "Restaurant not found." }, { status: 404 });
   }
   const restaurant = restaurantRows[0];
 
-  // ---- THE NUMBERS (computed fresh, every load) ----
-  const statsRows = await db`
-    SELECT AVG(rating)::float AS average, COUNT(*)::int AS total
-    FROM reviews WHERE restaurant_id = ${restaurantId}
-  `;
+  // ---- DERIVED ANSWERS (computed here, from the rows we just fetched) ----
   const stats = statsRows[0];
   const averageRating =
     stats.average === null ? null : Math.round(stats.average * 10) / 10;
 
-  // Rating distribution — a complete 1..5 table with ready-to-print bar widths.
-  // (The frontend prints {percent}% widths; IT never computes percentages.)
-  const distributionRows = await db`
-    SELECT rating, COUNT(*)::int AS count
-    FROM reviews WHERE restaurant_id = ${restaurantId}
-    GROUP BY rating
-  `;
+  // Distribution with ready-to-print bar widths (the frontend prints, never computes).
   const countByRating = new Map(distributionRows.map((r) => [r.rating, r.count]));
   const rawDistribution = [5, 4, 3, 2, 1].map((rating) => ({
     rating,
@@ -87,39 +128,11 @@ export async function GET(
     percent: Math.round((d.count / maxCount) * 100),
   }));
 
-  // ---- THE REVIEWS ----
-  const allReviews = await db`
-    SELECT id, rating, comment, display_name, created_at
-    FROM reviews WHERE restaurant_id = ${restaurantId}
-    ORDER BY created_at DESC
-  `;
-
-  // Which items did each review claim? Loaded once, joined in code.
-  const itemRows = await db`
-    SELECT review_items.review_id, menu_items.name
-    FROM review_items JOIN menu_items ON menu_items.id = review_items.item_id
-    WHERE menu_items.restaurant_id = ${restaurantId}
-  `;
   const itemsByReview = new Map<number, string[]>();
   for (const row of itemRows) {
     itemsByReview.set(row.review_id, [...(itemsByReview.get(row.review_id) ?? []), row.name]);
   }
-
-  // How helpful is each review, right now?
-  const reactionRows = await db`
-    SELECT reviews.id, COUNT(*)::int AS count
-    FROM reactions JOIN reviews ON reviews.id = reactions.review_id
-    WHERE reviews.restaurant_id = ${restaurantId}
-    GROUP BY reviews.id
-  `;
   const reactionsByReview = new Map(reactionRows.map((r) => [r.id, r.count]));
-
-  // Who reviews how often? (powering badges)
-  const personRows = await db`
-    SELECT display_name, COUNT(*)::int AS count
-    FROM reviews WHERE restaurant_id = ${restaurantId} AND display_name IS NOT NULL
-    GROUP BY display_name
-  `;
   const reviewsByPerson = new Map(personRows.map((r) => [r.display_name, r.count]));
 
   function shapeReview(row: Record<string, unknown>) {
@@ -152,16 +165,6 @@ export async function GET(
   // while a 4.75 earned across four reviews stands nearly unshaken.
   const PRIOR_REVIEWS = 3; // M — reviews before an item "speaks for itself"
   const overallAverage = averageRating ?? 0;
-
-  const itemStatsRows = await db`
-    SELECT menu_items.name, menu_items.kind,
-           AVG(reviews.rating)::float AS average, COUNT(*)::int AS count
-    FROM review_items
-    JOIN menu_items ON menu_items.id = review_items.item_id
-    JOIN reviews ON reviews.id = review_items.review_id
-    WHERE reviews.restaurant_id = ${restaurantId}
-    GROUP BY menu_items.name, menu_items.kind
-  `;
 
   function weighted(itemAverage: number, reviewCount: number): number {
     const confidence = reviewCount / (reviewCount + PRIOR_REVIEWS);
@@ -198,12 +201,8 @@ export async function GET(
   // ---- THE SUMMARY (the one approved cache) ----
   let summary: { kind: "ai" | "quick"; text: string } | null = null;
   if (stats.total > 0) {
-    const cachedRows = await db`
-      SELECT summary_text, review_count_at_generation
-      FROM ai_summaries WHERE restaurant_id = ${restaurantId}
-    `;
-    if (cachedRows.length > 0 && cachedRows[0].review_count_at_generation === stats.total) {
-      summary = { kind: "ai", text: cachedRows[0].summary_text };
+    if (cachedSummaryRows.length > 0 && cachedSummaryRows[0].review_count_at_generation === stats.total) {
+      summary = { kind: "ai", text: cachedSummaryRows[0].summary_text };
     } else {
       const facts: SummaryFacts = {
         restaurantName: restaurant.name,
@@ -241,11 +240,8 @@ export async function GET(
     }
   }
 
-  // The answering shape includes the menu too — the review form draws its
-  // item chips from THIS list, so fakerjs cannot conjure menu items client-side.
-  const menuRows = await db`
-    SELECT id, name, kind FROM menu_items WHERE restaurant_id = ${restaurantId} ORDER BY id
-  `;
+  // The response shape includes the menu — the review form draws its
+  // item chips from THIS list, so the client cannot conjure menu items.
 
   // ---- THE RESPONSE, shaped like the screen ----
   return Response.json({

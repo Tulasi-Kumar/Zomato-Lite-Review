@@ -53,10 +53,6 @@ export async function POST(request: Request) {
     return bad("restaurantId must be a whole number.");
   }
   const restaurantId = body.restaurantId as number;
-  const restaurantRows = await db`SELECT id FROM restaurants WHERE id = ${restaurantId}`;
-  if (restaurantRows.length === 0) {
-    return bad("That restaurant does not exist.");
-  }
 
   // CHECK 4 (NEW): displayName is optional — but if present it must be a short string.
   let displayName: string | null = null;
@@ -72,42 +68,63 @@ export async function POST(request: Request) {
   }
 
   // CHECK 5 (NEW): items — every claimed food item must REALLY exist on this
-  // restaurant's menu. Text like "I ate 900 burritos" gets washed in comment,
-  // but a fake item id cannot enter the facts tables.
+  // restaurant's menu. Local JS checks make the shape valid; the DATABASE
+  // proves the ids are real.
   let itemIds: number[] = [];
   if (body.items !== undefined && body.items !== null) {
     if (!Array.isArray(body.items) || body.items.some((id) => !Number.isInteger(id))) {
       return bad("Items must be a list of whole numbers.");
     }
-    const requested = body.items as number[];
-    // load this restaurant's real menu ONCE, compare in code
-    const menuRows = await db`SELECT id FROM menu_items WHERE restaurant_id = ${restaurantId}`;
-    const menuItemIds = new Set(menuRows.map((row) => row.id));
-    if (requested.some((id) => !menuItemIds.has(id))) {
-      return bad("Some selected items are not on this restaurant's menu.");
-    }
-    if (requested.length > 5) {
+    if ((body.items as number[]).length > 5) {
       return bad("Pick at most 5 items per review.");
     }
-    itemIds = requested;
+    itemIds = body.items as number[];
   }
 
-  // ---------- WRITE THE FACTS ----------
+  // ---------- NETWORK WAVE 1: validation, one round trip ----------
+  const [existRows, menuRows] = await Promise.all([
+    db`SELECT id FROM restaurants WHERE id = ${restaurantId}`,
+    itemIds.length > 0
+      ? db`SELECT id FROM menu_items WHERE restaurant_id = ${restaurantId}`
+      : Promise.resolve([] as { id: number }[]),
+  ]);
+  if (existRows.length === 0) {
+    return bad("That restaurant does not exist.");
+  }
+  const menuItemIds = new Set(menuRows.map((row) => row.id));
+  if (itemIds.some((id) => !menuItemIds.has(id))) {
+    return bad("Some selected items are not on this restaurant's menu.");
+  }
 
-  const inserted = await db`
-    INSERT INTO reviews (restaurant_id, rating, comment, display_name)
-    VALUES (${restaurantId}, ${body.rating}, ${(body.comment as string).trim()}, ${displayName})
-    RETURNING id
-  `;
-  const reviewId = inserted[0].id;
+  const trimmedComment = (body.comment as string).trim();
 
-  for (const itemId of itemIds) {
-    await db`
-      INSERT INTO review_items (review_id, item_id)
-      VALUES (${reviewId}, ${itemId})
-      ON CONFLICT (review_id, item_id) DO NOTHING
+  // ---------- NETWORK WAVE 2: write the facts, one round trip ----------
+  // No items? A single insert.
+  if (itemIds.length === 0) {
+    const inserted = await db`
+      INSERT INTO reviews (restaurant_id, rating, comment, display_name)
+      VALUES (${restaurantId}, ${body.rating}, ${trimmedComment}, ${displayName})
+      RETURNING id
     `;
+    return Response.json({ success: true, reviewId: inserted[0].id }, { status: 201 });
   }
 
-  return Response.json({ success: true, reviewId }, { status: 201 });
+  // Items? One statement writes the review AND all item links atomically:
+  // the CTE inserts the review, and unnest(string_to_array(...)) walks the
+  // validated ids inside Postgres — no injection risk (ints were checked
+  // in JS; the cast happens in the database).
+  const idsString = itemIds.join(",");
+  const inserted = await db`
+    WITH new_review AS (
+      INSERT INTO reviews (restaurant_id, rating, comment, display_name)
+      VALUES (${restaurantId}, ${body.rating}, ${trimmedComment}, ${displayName})
+      RETURNING id
+    )
+    INSERT INTO review_items (review_id, item_id)
+    SELECT nr.id, i.item_id
+    FROM new_review nr, unnest(string_to_array(${idsString}, ',')::int[]) AS i(item_id)
+    RETURNING (SELECT id FROM new_review) AS review_id
+  `;
+
+  return Response.json({ success: true, reviewId: inserted[0].review_id }, { status: 201 });
 }

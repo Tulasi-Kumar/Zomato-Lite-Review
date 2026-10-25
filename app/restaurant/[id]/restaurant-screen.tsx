@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
+import ThemeToggle from '@/components/theme-toggle';
 
 // ---- Types, copied from the API contract ----
 type ApiDistribution = { rating: number; count: number; percent: number };
@@ -233,6 +234,7 @@ export default function RestaurantScreen({ id }: { id: string }) {
   return (
     <main className="min-h-screen bg-background px-6 py-12 text-cream">
       <div className="mx-auto max-w-[560px]">
+        <ThemeToggle />
 
         {/* ---------- Header ---------- */}
         <header>

@@ -7,6 +7,7 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
+import ThemeToggle from '@/components/theme-toggle';
 
 type ApiMenu = { id: number; name: string; kind: string };
 
@@ -98,6 +99,7 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
   return (
     <main className="min-h-screen bg-background px-6 py-12 text-cream">
       <div className="mx-auto max-w-[560px]">
+        <ThemeToggle />
 
         {/* Celebration overlay — pure presentational toast, then redirect */}
         {celebrating && (
@@ -146,10 +148,10 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
                   type="button"
                   aria-label={`${star} star${star === 1 ? '' : 's'}`}
                   onClick={() => setRating(star)}
-                  className={`flex h-12 w-12 items-center justify-center rounded-xl border text-2xl transition-colors ${
+                  className={`flex h-12 w-12 items-center justify-center rounded-xl border-2 text-2xl transition-colors ${
                     star <= rating
-                      ? 'border-ember/60 bg-ember/15 text-ember'
-                      : 'border-line bg-surface text-cream-muted/40 hover:border-ember/30'
+                      ? 'border-ember bg-ember/25 text-ember font-bold'
+                      : 'border-line bg-surface text-cream-muted hover:border-ember/50 hover:text-ember/60'
                   }`}
                 >
                   ★
@@ -196,10 +198,15 @@ export default function ReviewForm({ restaurantId }: { restaurantId: string }) {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="w-full rounded-xl bg-ember px-6 py-3.5 text-sm font-semibold text-[#1a1408] transition-colors hover:bg-ember-dim disabled:cursor-not-allowed disabled:bg-surface disabled:text-cream-muted"
+            className="w-full rounded-xl border-2 px-6 py-3.5 text-sm font-semibold transition-colors bg-ember border-ember text-[#1a1408] hover:bg-ember-dim disabled:cursor-not-allowed disabled:bg-surface disabled:border-line disabled:text-cream-muted"
           >
             {submitting ? 'Submitting…' : 'Submit review'}
           </button>
+          {!canSubmit && !submitting && (
+            <p className="text-center text-xs text-cream-muted">
+              Pick a star and write a comment to unlock the button.
+            </p>
+          )}
         </form>
       </div>
     </main>

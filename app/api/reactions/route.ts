@@ -30,18 +30,25 @@ export async function POST(request: Request) {
   }
   const reviewId = body.reviewId as number;
 
-  // CHECK 2: that review must actually exist (database lookup).
-  const rows = await db`SELECT id FROM reviews WHERE id = ${reviewId}`;
-  if (rows.length === 0) {
+  // Write the fact AND report the fresh count — in ONE statement.
+  // The CTE "target" is empty for a nonexistent review (nothing gets inserted,
+  // and the SELECT reports reviewOk: false instead of inventing a row).
+  const resultRows = await db`
+    WITH target AS (
+      SELECT id FROM reviews WHERE id = ${reviewId}
+    ),
+    fresh AS (
+      INSERT INTO reactions (review_id)
+      SELECT id FROM target
+      RETURNING id
+    )
+    SELECT
+      EXISTS(SELECT 1 FROM target) AS "reviewOk",
+      (SELECT COUNT(*)::int FROM reactions
+       WHERE review_id = (SELECT id FROM target)) AS "reactions"
+  `;
+  if (!resultRows[0].reviewOk) {
     return Response.json({ error: "That review does not exist." }, { status: 400 });
   }
-
-  // Write exactly one fact row.
-  await db`INSERT INTO reactions (review_id) VALUES (${reviewId})`;
-
-  // Reply with the FRESH count — computed now, not remembered from earlier.
-  const [countRows] = await db`
-    SELECT COUNT(*)::int AS count FROM reactions WHERE review_id = ${reviewId}
-  `;
-  return Response.json({ success: true, reactions: countRows.count }, { status: 201 });
+  return Response.json({ success: true, reactions: resultRows[0].reactions }, { status: 201 });
 }

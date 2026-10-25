@@ -1,40 +1,70 @@
 @import "tailwindcss";
 
-/* ---------------- Warm Ember Dark theme ----------------
-   Deep charcoal like a candle-lit dining room floor,
-   warm amber like firelight, cream type like menus printed on card stock. */
+/* ---------------- Two themes, one token system ----------------
+   Every color is a CSS variable the screens consume through Tailwind
+   tokens (--color-*). Both modes keep the SAME semantics:
+     surface      = cards                    line   = borders
+     cream        = primary text (despite the name!)
+     cream-muted  = secondary text
+     ember        = the warm accent          ember-dim = pressed accent
+     veggie/meat  = only for veg & non-veg tags
+   LIGHT = warm paper, candle-shop daylight.
+   DARK  = Warm Ember night (the build from before). */
 
 :root {
+  /* LIGHT MODE (default) */
+  --background: #f7f1e5;
+  --foreground: #26190d;
+  --surface: #fffdf8;
+  --surface-raised: #fbf3e2;
+  --line: #e3d8c3;
+  --cream: #26190d;
+  --cream-muted: #8a7960;
+  --ember: #b45309;
+  --ember-dim: #92400e;
+  --veggie: #4d7c43;
+  --meat: #bf5b2b;
+}
+
+html.theme-dark {
+  /* DARK MODE */
   --background: #171411;
   --foreground: #f3eadd;
+  --surface: #211c17;
+  --surface-raised: #2a231d;
+  --line: #3a312a;
+  --cream: #f3eadd;
+  --cream-muted: #b0a28e;
+  --ember: #f59e0b;
+  --ember-dim: #b45309;
+  --veggie: #7bb661;
+  --meat: #d97c50;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-
-  --color-surface: #211c17;        /* cards */
-  --color-surface-raised: #2a231d; /* highlighted cards */
-  --color-line: #3a312a;           /* hairline borders */
-
-  --color-cream: #f3eadd;          /* primary text */
-  --color-cream-muted: #b0a28e;    /* secondary text */
-
-  --color-ember: #f59e0b;          /* the one warm accent */
-  --color-ember-dim: #b45309;      /* pressed/faded accent */
-  --color-veggie: #7bb661;         /* used ONLY for veg tags */
-  --color-meat: #d97c50;           /* used ONLY for non-veg tags */
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-line: var(--line);
+  --color-cream: var(--cream);
+  --color-cream-muted: var(--cream-muted);
+  --color-ember: var(--ember);
+  --color-ember-dim: var(--ember-dim);
+  --color-veggie: var(--veggie);
+  --color-meat: var(--meat);
 
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
 html {
-  color-scheme: dark;
+  color-scheme: light dark;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
+  transition: background-color 160ms ease, color 160ms ease;
 }
