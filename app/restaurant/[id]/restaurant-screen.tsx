@@ -195,6 +195,94 @@ function forget(prev: Record<number, number>, reviewId: number): Record<number, 
   return next;
 }
 
+import { QUESTIONS } from '@/lib/ask';
+
+// Ask the chef — the clickable question deck. Clicking a chip asks the
+// BACKEND, which either prints a cached AI answer, asks the real model,
+// or falls back to honest fact text. This file only prints answers.
+function AskChef({ restaurantId, hasVegReviews, hasNonVegReviews }: {
+  restaurantId: string;
+  hasVegReviews: boolean;
+  hasNonVegReviews: boolean;
+}) {
+  const [answer, setAnswer] = useState<{ question: string; text: string; kind: 'ai' | 'quick' } | null>(null);
+  const [asking, setAsking] = useState<string | null>(null);
+
+  // Only questions the facts can actually feed appear on the deck.
+  const deck = Object.entries(QUESTIONS).filter(([key]) => {
+    if (key === 'topVeg') return hasVegReviews;
+    if (key === 'topNonVeg') return hasNonVegReviews;
+    if (key === 'mustTry3') return hasVegReviews || hasNonVegReviews;
+    return true;
+  });
+
+  async function ask(questionKey: string) {
+    if (asking) return;
+    setAsking(questionKey);
+    setAnswer(null);
+    try {
+      const res = await fetch('/api/ask', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ restaurantId: Number(restaurantId), questionKey }),
+      });
+      if (!res.ok) throw new Error('ask failed');
+      const data = (await res.json()) as { question: string; answer: string; kind: 'ai' | 'quick' };
+      setAnswer({ question: data.question, text: data.answer, kind: data.kind });
+    } catch {
+      setAnswer({
+        question: QUESTIONS[questionKey],
+        text: 'The chef is not answering right now — try again in a moment.',
+        kind: 'quick',
+      });
+    } finally {
+      setAsking(null);
+    }
+  }
+
+  return (
+    <section className="mt-10 rounded-2xl border border-ember/25 bg-surface p-5">
+      <p className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-widest text-ember">
+        <span aria-hidden>✦</span> Ask the chef
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {deck.map(([key, text]) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => ask(key)}
+            disabled={asking !== null}
+            className={`rounded-full border px-3.5 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
+              asking === key
+                ? 'border-ember bg-ember/15 text-ember'
+                : 'border-line text-cream-muted hover:border-ember/50 hover:text-ember'
+            }`}
+          >
+            {text}
+          </button>
+        ))}
+      </div>
+      {asking && (
+        <div className="mt-4 space-y-2" role="status" aria-label="Thinking">
+          <div className="h-3 w-11/12 animate-pulse rounded bg-surface-raised" />
+          <div className="h-3 w-8/12 animate-pulse rounded bg-surface-raised" />
+        </div>
+      )}
+      {answer && !asking && (
+        <div className="mt-4 border-t border-line pt-3">
+          <p className="text-[11px] font-medium uppercase tracking-wider text-cream-muted">
+            {answer.question}
+            <span className="ml-2 text-ember">
+              {answer.kind === 'ai' ? '✦ AI concierge' : '· quick facts, no AI key yet'}
+            </span>
+          </p>
+          <p className="mt-2 text-[15px] leading-relaxed text-cream">{answer.text}</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function RestaurantScreen({ id }: { id: string }) {
   const [restaurant, setRestaurant] = useState<ApiRestaurant | null>(null);
   const [failed, setFailed] = useState(false);
@@ -457,6 +545,13 @@ export default function RestaurantScreen({ id }: { id: string }) {
                 </div>
               )}
             </section>
+
+            {/* ---------- Ask the chef ---------- */}
+            <AskChef
+              restaurantId={id}
+              hasVegReviews={topItems.veg.length > 0}
+              hasNonVegReviews={topItems.nonVeg.length > 0}
+            />
 
             {/* ---------- Latest review, highlighted ---------- */}
             {latestReview && (

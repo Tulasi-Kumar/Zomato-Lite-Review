@@ -51,6 +51,17 @@ CREATE TABLE IF NOT EXISTS ai_summaries (
   generated_at             TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Same exception family, extended for "Ask the chef": per-QUESTION cached AI
+-- answers, invalidated the same way (review count changed = stale). V2.6.
+CREATE TABLE IF NOT EXISTS ai_answers (
+  restaurant_id             INTEGER NOT NULL REFERENCES restaurants(id),
+  question_key              TEXT NOT NULL,
+  answer_text               TEXT NOT NULL,
+  review_count_at_generation INTEGER NOT NULL,
+  generated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY (restaurant_id, question_key)
+);
+
 -- Upgrade path for databases created before V2 -------------------------------
 ALTER TABLE reviews ADD COLUMN IF NOT EXISTS display_name TEXT;
 
