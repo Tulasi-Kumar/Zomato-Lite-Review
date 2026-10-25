@@ -273,7 +273,7 @@ function AskChef({ restaurantId, hasVegReviews, hasNonVegReviews }: {
           <p className="text-[11px] font-medium uppercase tracking-wider text-cream-muted">
             {answer.question}
             <span className="ml-2 text-ember">
-              {answer.kind === 'ai' ? '✦ AI concierge' : '· quick facts, no AI key yet'}
+              {answer.kind === 'ai' ? '✦ AI concierge' : '· quick facts'}
             </span>
           </p>
           <p className="mt-2 text-[15px] leading-relaxed text-cream">{answer.text}</p>
@@ -495,7 +495,7 @@ export default function RestaurantScreen({ id }: { id: string }) {
                   {summary.kind === 'ai' ? 'AI overview' : 'Quick overview'}
                   {summary.kind !== 'ai' && (
                     <span className="font-normal normal-case tracking-normal text-cream-muted">
-                      · add an AI key to upgrade
+                      · computed from real reviews
                     </span>
                   )}
                 </p>
