@@ -12,18 +12,15 @@ function getDb() {
 }
 
 // Shaper: turns one raw database row into the review format the screen expects.
-// camelCase createdAt instead of snake_case created_at — a gift to the frontend.
-function toReview(row: {
-  id: number;
-  rating: number;
-  comment: string;
-  created_at: Date;
-}) {
+// Rows arrive as generic objects (the driver doesn't know our schema), so we
+// convert each field explicitly here — and camelCase createdAt instead of
+// snake_case created_at as a gift to the frontend.
+function toReview(row: Record<string, unknown>) {
   return {
-    id: row.id,
-    rating: row.rating,
-    comment: row.comment,
-    createdAt: row.created_at.toISOString(),
+    id: row.id as number,
+    rating: row.rating as number,
+    comment: row.comment as string,
+    createdAt: (row.created_at as Date).toISOString(),
   };
 }
 
