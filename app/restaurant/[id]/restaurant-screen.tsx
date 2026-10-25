@@ -86,11 +86,13 @@ function ReviewCard({
   review,
   highlighted,
   reacted,
+  pending,
   onReact,
 }: {
   review: ApiReview;
   highlighted: boolean;
   reacted: boolean;
+  pending: boolean;
   onReact: (reviewId: number) => void;
 }) {
   const heart = reacted ? '♥' : '♡';
@@ -134,27 +136,71 @@ function ReviewCard({
         <button
           type="button"
           onClick={() => onReact(review.id)}
-          disabled={reacted}
+          disabled={pending}
           className={`flex items-center gap-2 rounded-full border px-3.5 py-1.5 text-sm transition-colors disabled:cursor-not-allowed ${
             reacted
               ? 'border-ember/40 bg-ember/15 text-ember'
               : 'border-line text-cream-muted hover:border-ember/40 hover:text-ember'
           }`}
           aria-pressed={reacted}
-          aria-label="Helpful"
+          aria-label={reacted ? 'Remove your reaction' : 'Helpful'}
+          title={reacted ? 'You reacted — tap to take it back' : 'Helpful'}
         >
           <span aria-hidden>{heart}</span>
           <span>{review.reactions}</span>
         </button>
+        {reacted && (
+          <span className="text-[11px] text-cream-muted">tap again to revoke</span>
+        )}
       </div>
     </article>
   );
 }
 
+// Which taps were MINE? Per-browser memory so a reaction can be revoked even
+// after a refresh. Our SECOND conscious localStorage exception (after theme).
+const MY_REACTIONS_KEY = 'zl-my-reactions';
+
+function readMyReactions(): Record<string, number> {
+  try {
+    return JSON.parse(window.localStorage.getItem(MY_REACTIONS_KEY) ?? '{}');
+  } catch {
+    return {};
+  }
+}
+
+function rememberMyReaction(reviewId: number, reactionId: number) {
+  try {
+    const all = readMyReactions();
+    all[String(reviewId)] = reactionId;
+    window.localStorage.setItem(MY_REACTIONS_KEY, JSON.stringify(all));
+  } catch {
+    /* private-browsing guards etc. — undo simply won't survive a refresh */
+  }
+}
+
+function forgetMyReaction(reviewId: number) {
+  try {
+    const all = readMyReactions();
+    delete all[String(reviewId)];
+    window.localStorage.setItem(MY_REACTIONS_KEY, JSON.stringify(all));
+  } catch {
+    /* nothing to do */
+  }
+}
+
+function forget(prev: Record<number, number>, reviewId: number): Record<number, number> {
+  const next = { ...prev };
+  delete next[reviewId];
+  return next;
+}
+
 export default function RestaurantScreen({ id }: { id: string }) {
   const [restaurant, setRestaurant] = useState<ApiRestaurant | null>(null);
   const [failed, setFailed] = useState(false);
-  const [reacted, setReacted] = useState<Set<number>>(new Set());
+  // reviewId → the id of MY fact row for that review (undefined = I haven't reacted).
+  const [myReactions, setMyReactions] = useState<Record<number, number>>({});
+  const [tapping, setTapping] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -174,31 +220,98 @@ export default function RestaurantScreen({ id }: { id: string }) {
     };
   }, [id]);
 
-  // ♡ tap → one FACT row via the API → the backend replies with the FRESH count.
-  // We print the returned count; we never count anything here.
-  async function react(reviewId: number) {
-    if (reacted.has(reviewId)) return;
-    const res = await fetch('/api/reactions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reviewId }),
-    });
-    if (!res.ok) return;
-    const data = (await res.json()) as { reactions: number };
-    setReacted((prev) => new Set(prev).add(reviewId));
-    setRestaurant((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        latestReview:
-          prev.latestReview && prev.latestReview.id === reviewId
-            ? { ...prev.latestReview, reactions: data.reactions }
-            : prev.latestReview,
-        reviews: prev.reviews.map((r) =>
-          r.id === reviewId ? { ...r, reactions: data.reactions } : r
-        ),
-      };
-    });
+  // Which taps were MINE? Remembered per browser (localStorage — our second
+  // conscious rule-bend, next to the theme), so revoke survives a refresh.
+  useEffect(() => {
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(MY_REACTIONS_KEY) ?? '{}');
+      const restored: Record<number, number> = {};
+      for (const [key, value] of Object.entries(stored)) {
+        if (Number.isInteger(value)) restored[Number(key)] = value as number;
+      }
+      setMyReactions((prev) => ({ ...restored, ...prev }));
+    } catch {
+      /* a broken memory store must never break the page */
+    }
+  }, []);
+
+  // ---------- Reactions: optimistic, toggleable, server-confirmed ----------
+
+  // Prints a ±1 change INSTANTLY, before the network answers.
+  function printCount(preview: ApiRestaurant | null, reviewId: number, delta: number) {
+    if (!preview) return preview;
+    const bump = (r: ApiReview): ApiReview =>
+      r.id === reviewId ? { ...r, reactions: Math.max(0, r.reactions + delta) } : r;
+    return {
+      ...preview,
+      latestReview: preview.latestReview ? bump(preview.latestReview) : null,
+      reviews: preview.reviews.map(bump),
+    };
+  }
+
+  // Prints the server's fresh, exact number once the database has spoken.
+  function printExact(preview: ApiRestaurant | null, reviewId: number, count: number) {
+    if (!preview) return preview;
+    const fix = (r: ApiReview): ApiReview =>
+      r.id === reviewId ? { ...r, reactions: count } : r;
+    return {
+      ...preview,
+      latestReview: preview.latestReview ? fix(preview.latestReview) : null,
+      reviews: preview.reviews.map(fix),
+    };
+  }
+
+  async function toggleReaction(reviewId: number) {
+    if (tapping.has(reviewId) || !restaurant) return;
+    setTapping((prev) => new Set(prev).add(reviewId));
+
+    const mine = myReactions[reviewId];
+    const revoking = typeof mine === 'number' && mine > 0;
+
+    // STEP 1 — optimism: the heart and count move THIS frame.
+    setRestaurant((prev) => printCount(prev, reviewId, revoking ? -1 : +1));
+    setMyReactions((prev) => ({ ...prev, [reviewId]: revoking ? 0 : -1 }));
+
+    try {
+      if (revoking) {
+        // STEP 2 — revoke: remove my fact row, then print the database's truth.
+        const res = await fetch('/api/reactions', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: mine }),
+        });
+        if (!res.ok) throw new Error('revoke failed');
+        const data = (await res.json()) as { reactions: number | null };
+        if (typeof data.reactions === 'number') {
+          setRestaurant((prev) => printExact(prev, reviewId, data.reactions as number));
+        }
+        setMyReactions((prev) => forget(prev, reviewId));
+        forgetMyReaction(reviewId);
+      } else {
+        // STEP 2 — react: one fact row, whose id comes back for future undo.
+        const res = await fetch('/api/reactions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reviewId }),
+        });
+        if (!res.ok) throw new Error('react failed');
+        const data = (await res.json()) as { reactions: number; id: number };
+        setRestaurant((prev) => printExact(prev, reviewId, data.reactions));
+        setMyReactions((prev) => ({ ...prev, [reviewId]: data.id }));
+        rememberMyReaction(reviewId, data.id);
+      }
+    } catch {
+      // STEP 3 — honesty: if the server never agreed, undo the optimism.
+      setRestaurant((prev) => printCount(prev, reviewId, revoking ? +1 : -1));
+      setMyReactions((prev) => (revoking ? { ...prev, [reviewId]: mine } : forget(prev, reviewId)));
+      if (!revoking) forgetMyReaction(reviewId);
+    } finally {
+      setTapping((prev) => {
+        const next = new Set(prev);
+        next.delete(reviewId);
+        return next;
+      });
+    }
   }
 
   // Skeleton loading — the page fills with shimmering placeholders until data lands.
@@ -232,7 +345,7 @@ export default function RestaurantScreen({ id }: { id: string }) {
     restaurant;
 
   return (
-    <main className="min-h-screen bg-background px-6 py-12 text-cream">
+    <main className="min-h-screen bg-background px-6 pb-32 py-12 pt-12 text-cream">
       <div className="mx-auto max-w-[560px]">
         <ThemeToggle />
 
@@ -350,7 +463,13 @@ export default function RestaurantScreen({ id }: { id: string }) {
               <section className="mt-10">
                 <h2 className="text-[11px] font-semibold uppercase tracking-widest text-cream-muted">Latest review</h2>
                 <div className="mt-4">
-                  <ReviewCard review={latestReview} highlighted reacted={reacted.has(latestReview.id)} onReact={react} />
+                  <ReviewCard
+                    review={latestReview}
+                    highlighted
+                    reacted={myReactions[latestReview.id] !== undefined}
+                    pending={tapping.has(latestReview.id)}
+                    onReact={toggleReaction}
+                  />
                 </div>
               </section>
             )}
@@ -367,25 +486,31 @@ export default function RestaurantScreen({ id }: { id: string }) {
                       key={review.id}
                       review={review}
                       highlighted={false}
-                      reacted={reacted.has(review.id)}
-                      onReact={react}
+                      reacted={myReactions[review.id] !== undefined}
+                      pending={tapping.has(review.id)}
+                      onReact={toggleReaction}
                     />
                   ))}
                 </div>
               </section>
             )}
 
-            {/* ---------- CTA ---------- */}
-            <section className="mt-12 border-t border-line pt-8">
-              <Link
-                href={`/review/${id}`}
-                className="inline-block rounded-xl bg-ember px-6 py-3 text-sm font-semibold text-[#1a1408] transition-colors hover:bg-ember-dim"
-              >
-                Write a review
-              </Link>
-            </section>
+            {/* The old in-flow CTA was removed: the pinned bottom bar below
+                is ALWAYS reachable, no matter where you have scrolled. */}
           </>
         )}
+      </div>
+
+      {/* ---------- Pinned "Write a review" bar ---------- */}
+      <div className="fixed inset-x-0 bottom-0 z-40 border-t border-line bg-background/95 px-6 pb-4 pt-3 backdrop-blur">
+        <div className="mx-auto max-w-[560px]">
+          <Link
+            href={`/review/${id}`}
+            className="block rounded-xl bg-ember px-6 py-3.5 text-center text-sm font-semibold text-[#1a1408] transition-colors hover:bg-ember-dim"
+          >
+            Write a review
+          </Link>
+        </div>
       </div>
     </main>
   );
